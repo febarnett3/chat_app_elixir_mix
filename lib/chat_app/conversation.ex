@@ -41,12 +41,15 @@ defmodule ChatApp.Conversation do
     # TODO (future): monitor participant PIDs to detect crashes or disconnects
   end
 
- def handle_cast({:send_message, {username, message, sender_pid}}, state) do
+  def handle_cast({:send_message, {username, message, sender_pid}}, state) do
     message_map = %{
       from: username,
       text: message,
       timestamp: DateTime.utc_now()
     }
+
+    # AUTO-PRINT TO SERVER TERMINAL
+    IO.puts("[#{username}] #{message}")
 
     new_messages = [message_map | state.messages]
 

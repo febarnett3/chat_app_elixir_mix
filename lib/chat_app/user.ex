@@ -51,11 +51,21 @@ defmodule ChatApp.User do
 
 
     def handle_call({:join, room_name}, _from, state) do
-        {:ok, room_pid} = ChatApp.ConversationManager.get_or_start_conversation(room_name)
+        room_pid =
+            case ChatApp.ConversationManager.get_or_start_conversation(room_name) do
+            {:ok, pid} ->
+                pid
+
+            {:error, {:already_started, pid}} ->
+                pid
+            end
+
         ChatApp.Conversation.join(room_pid, self())
         new_state = %{state | current_room: room_pid}
+
         {:reply, {:joined, room_name}, new_state}
     end
+
 
     def handle_call(:leave, _from, state) do
     if state.current_room do
