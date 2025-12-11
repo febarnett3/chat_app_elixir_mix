@@ -1,7 +1,16 @@
 defmodule ChatApp.CLI do
   def main(_args) do
+    # 1. Start CLI as a distributed Erlang node immediately
+    node_name = :"cli_#{System.unique_integer([:positive])}"
+    {:ok, _} = Node.start(node_name, :shortnames)
+
+    # 2. Ensure cookie matches the server’s cookie
+    Node.set_cookie(:chat_cookie)
+
+    # 3. Start listener
     listener_pid = spawn(fn -> message_listener() end)
 
+    # 4. Initial state
     state = %{
       server: nil,
       listener: listener_pid,
@@ -12,6 +21,7 @@ defmodule ChatApp.CLI do
     IO.puts("Welcome to ChatApp!")
     loop(state)
   end
+
 
 
   defp loop(state) do
@@ -48,12 +58,7 @@ defmodule ChatApp.CLI do
   defp handle_command("/quit", _state), do: :quit
 
   defp handle_command("/connect " <> node_str, state) do
-    # Convert text "server@HOST" into atom :"server@HOST"
     node_atom = String.to_atom(node_str)
-
-    # Start this escript as a distributed node (if not already)
-    {:ok, _} = Node.start(:"cli_#{:rand.uniform(1000)}", :shortnames)
-    Node.set_cookie(:chat_cookie)
 
     case Node.connect(node_atom) do
       true ->
@@ -65,6 +70,7 @@ defmodule ChatApp.CLI do
         {:ok, state}
     end
   end
+
 
   defp handle_command("/login " <> username, state) do
     if state.server == nil do
