@@ -1,7 +1,14 @@
 defmodule ChatApp.CLI do
   def main(_args) do
+    # Distribution MUST already be started by the VM
+    unless Node.alive?() do
+      IO.puts("WARNING: Node is not running in distributed mode")
+    end
+
+    # Start listener
     listener_pid = spawn(fn -> message_listener() end)
 
+    # Initial state
     state = %{
       server: nil,
       listener: listener_pid,
@@ -13,18 +20,18 @@ defmodule ChatApp.CLI do
     loop(state)
   end
 
-
   defp loop(state) do
     IO.write("chat> ")
+
     input =
       IO.gets("")
       |> to_string()
       |> String.trim()
 
     case handle_command(input, state) do
-        {:ok, new_state} -> loop(new_state)
-        :quit -> IO.puts("Goodbye!")
-      end
+      {:ok, new_state} -> loop(new_state)
+      :quit -> IO.puts("Goodbye!")
+    end
   end
 
   defp message_listener do
@@ -43,17 +50,14 @@ defmodule ChatApp.CLI do
     message_listener()
   end
 
-
+  # ------------------------
+  # Commands
+  # ------------------------
 
   defp handle_command("/quit", _state), do: :quit
 
   defp handle_command("/connect " <> node_str, state) do
-    # Convert text "server@HOST" into atom :"server@HOST"
     node_atom = String.to_atom(node_str)
-
-    # Start this escript as a distributed node (if not already)
-    {:ok, _} = Node.start(:"cli_#{:rand.uniform(1000)}", :shortnames)
-    Node.set_cookie(:chat_cookie)
 
     case Node.connect(node_atom) do
       true ->
@@ -81,7 +85,6 @@ defmodule ChatApp.CLI do
 
       case result do
         {:ok, user_pid} ->
-          # Tell server to send messages to our listener
           :rpc.call(
             state.server,
             ChatApp.User,
@@ -114,19 +117,17 @@ defmodule ChatApp.CLI do
     end
   end
 
-
   defp handle_command("/join " <> room_name, state) do
     cond do
       state.server == nil ->
         IO.puts("You must /connect first.")
         {:ok, state}
 
-      state[:user] == nil ->
+      state.user == nil ->
         IO.puts("You must /login first.")
         {:ok, state}
 
       true ->
-        # Extract pid from state
         user_pid = state.user.pid
 
         result =
@@ -140,12 +141,11 @@ defmodule ChatApp.CLI do
         case result do
           {:joined, ^room_name} ->
             IO.puts("Joined room #{room_name}")
-            {:ok, Map.put(state, :current_room, room_name)}
+            {:ok, %{state | current_room: room_name}}
 
           :ok ->
-            # Your User.join/2 currently returns :ok in your code
             IO.puts("Joined room #{room_name}")
-            {:ok, Map.put(state, :current_room, room_name)}
+            {:ok, %{state | current_room: room_name}}
 
           {:badrpc, reason} ->
             IO.puts("RPC error: #{inspect(reason)}")
@@ -164,29 +164,25 @@ defmodule ChatApp.CLI do
         IO.puts("You must /connect first.")
         {:ok, state}
 
-      state[:user] == nil ->
+      state.user == nil ->
         IO.puts("You must /login first.")
         {:ok, state}
 
-      state[:current_room] == nil ->
+      state.current_room == nil ->
         IO.puts("You must /join a room first.")
         {:ok, state}
 
       true ->
-        user_pid = state.user.pid
-
         result =
           :rpc.call(
             state.server,
             ChatApp.User,
             :send_message,
-            [user_pid, text]
+            [state.user.pid, text]
           )
 
         case result do
-          :ok ->
-            {:ok, state}
-
+          :ok -> {:ok, state}
           {:badrpc, reason} ->
             IO.puts("RPC error: #{inspect(reason)}")
             {:ok, state}
@@ -213,29 +209,15 @@ defmodule ChatApp.CLI do
         {:ok, state}
 
       true ->
-        user_pid = state.user.pid
+        :rpc.call(
+          state.server,
+          ChatApp.User,
+          :leave,
+          [state.user.pid]
+        )
 
-        result =
-          :rpc.call(
-            state.server,
-            ChatApp.User,
-            :leave,
-            [user_pid]
-          )
-
-        case result do
-          :ok ->
-            IO.puts("You left the room.")
-            {:ok, %{state | current_room: nil}}
-
-          {:badrpc, reason} ->
-            IO.puts("RPC error: #{inspect(reason)}")
-            {:ok, state}
-
-          other ->
-            IO.puts("Unexpected leave result: #{inspect(other)}")
-            {:ok, state}
-        end
+        IO.puts("You left the room.")
+        {:ok, %{state | current_room: nil}}
     end
   end
 
@@ -249,10 +231,7 @@ defmodule ChatApp.CLI do
           state.server,
           Registry,
           :select,
-          [
-            ChatApp.Registry,
-            [{{:"$1", :_, :_}, [], [:"$1"]}]
-          ]
+          [ChatApp.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}]]
         )
 
       case rooms do
@@ -283,74 +262,35 @@ defmodule ChatApp.CLI do
         {:ok, state}
 
       true ->
-        room_name = state.current_room
+        [{room_pid, _}] =
+          :rpc.call(state.server, Registry, :lookup, [ChatApp.Registry, state.current_room])
 
-        # Look up room PID on the server
-        result =
+        users =
           :rpc.call(
             state.server,
-            Registry,
-            :lookup,
-            [ChatApp.Registry, room_name]
+            ChatApp.ConversationManager,
+            :list_participants,
+            [room_pid]
           )
 
-        case result do
-          {:badrpc, reason} ->
-            IO.puts("RPC error: #{inspect(reason)}")
-            {:ok, state}
+        IO.puts("Users in #{state.current_room}:")
+        Enum.each(users, fn pid ->
+          name = :rpc.call(state.server, ChatApp.User, :get_username, [pid])
+          IO.puts(" - #{name}")
+        end)
 
-          [] ->
-            IO.puts("Room does not exist.")
-            {:ok, state}
-
-          [{room_pid, _}] ->
-            users =
-              :rpc.call(
-                state.server,
-                ChatApp.ConversationManager,
-                :list_participants,
-                [room_pid]
-              )
-
-            usernames =
-              Enum.map(users, fn pid ->
-                :rpc.call(state.server, ChatApp.User, :get_username, [pid])
-              end)
-
-
-            IO.puts("Users in #{room_name}:")
-            Enum.each(usernames, fn name ->
-              IO.puts(" - #{name}")
-            end)
-
-            {:ok, state}
-        end
+        {:ok, state}
     end
   end
 
   defp handle_command("/logout", state) do
-    cond do
-      state.server == nil ->
-        IO.puts("You must /connect first.")
-        {:ok, state}
-
-      state.user == nil ->
-        IO.puts("You are not logged in.")
-        {:ok, state}
-
-      true ->
-        user_pid = state.user.pid
-
-        :rpc.call(
-          state.server,
-          ChatApp.User,
-          :stop,
-          [user_pid]
-        )
-
-        IO.puts("Logged out.")
-
-        {:ok, %{state | user: nil, current_room: nil}}
+    if state.user do
+      :rpc.call(state.server, ChatApp.User, :stop, [state.user.pid])
+      IO.puts("Logged out.")
+      {:ok, %{state | user: nil, current_room: nil}}
+    else
+      IO.puts("You are not logged in.")
+      {:ok, state}
     end
   end
 
@@ -358,5 +298,4 @@ defmodule ChatApp.CLI do
     IO.puts("Unknown command: #{cmd}")
     {:ok, state}
   end
-
 end
