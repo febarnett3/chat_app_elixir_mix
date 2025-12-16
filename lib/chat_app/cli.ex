@@ -1,5 +1,6 @@
 defmodule ChatApp.CLI do
   def main(_args) do
+<<<<<<< HEAD
     # Distribution MUST already be started by the VM
     unless Node.alive?() do
       IO.puts("WARNING: Node is not running in distributed mode")
@@ -9,6 +10,19 @@ defmodule ChatApp.CLI do
     listener_pid = spawn(fn -> message_listener() end)
 
     # Initial state
+=======
+    # 1. Start CLI as a distributed Erlang node immediately
+    node_name = :"cli_#{System.unique_integer([:positive])}"
+    {:ok, _} = Node.start(node_name, :shortnames)
+
+    # 2. Ensure cookie matches the server’s cookie
+    Node.set_cookie(:chat_cookie)
+
+    # 3. Start listener
+    listener_pid = spawn(fn -> message_listener() end)
+
+    # 4. Initial state
+>>>>>>> 6aff119b8dfc21d16aa0fa1dd3a432ffedd4d92e
     state = %{
       server: nil,
       listener: listener_pid,
@@ -20,6 +34,11 @@ defmodule ChatApp.CLI do
     loop(state)
   end
 
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> 6aff119b8dfc21d16aa0fa1dd3a432ffedd4d92e
   defp loop(state) do
     IO.write("chat> ")
 
@@ -69,6 +88,7 @@ defmodule ChatApp.CLI do
         {:ok, state}
     end
   end
+
 
   defp handle_command("/login " <> username, state) do
     if state.server == nil do
